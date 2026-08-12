@@ -2496,6 +2496,8 @@ async function sbDeleteDeposito(lotId, deposito){
       {method:'DELETE'});
   }catch(e){console.warn('sbDeleteDeposito:',e.message);}
 }
+
+async function sbInsertLot(lot){
   try{
     await sbFetch('/rest/v1/lotes',{method:'POST',
       headers:{'Prefer':'resolution=merge-duplicates,return=minimal'},
