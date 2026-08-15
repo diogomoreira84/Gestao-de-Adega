@@ -3840,6 +3840,23 @@ function checkVesselCapacity(destDep, volToAdd, excludeLotIds=[]){
 }
 
 // ── TRASFEGA ──────────────────────────────────────────────────────────────────
+function depOpts(excludeDep){
+  // Lista todos os depósitos conhecidos (do registo de vasilhas + lotes actuais)
+  const known = Object.keys(VESSEL_REGISTRY||{});
+  const fromLots = lots.map(l=>l.deposito).filter(Boolean);
+  const all = [...new Set([...known,...fromLots])].sort((a,b)=>{
+    // Ordenar: B primeiro, depois Inox, DT, outros
+    const rank = s => s.startsWith('B')?0:s.startsWith('Inox')?1:s.startsWith('DT')?2:3;
+    if(rank(a)!==rank(b)) return rank(a)-rank(b);
+    return a.localeCompare(b, 'pt', {numeric:true});
+  });
+  return all.filter(d=>d!==excludeDep).map(d=>{
+    const lot = lots.find(l=>l.deposito===d);
+    const label = lot ? `${d} — ${(lot.casta||'').substring(0,20)} (${fmtVol(lot.volume)})` : `${d} — livre`;
+    return `<option value="${d}">${label}</option>`;
+  }).join('');
+}
+
 function addTrasfDest(){
   const list = document.getElementById('om-dest-list');
   if(!list) return;
