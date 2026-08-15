@@ -346,69 +346,6 @@ input[type=file]{display:none}
   } catch(e){}
 })();
 </script>
-<script>
-// Patch 2026-08-10: reverter lotação B1525 (Inox 3) → restaurar AM_B7, AM_B8, AM_B12
-(function(){
-  try {
-    var KEY = 'adega_tracker_v12';
-    var raw = localStorage.getItem(KEY);
-    if (!raw) return;
-    var d = JSON.parse(raw);
-    var amLots = d.lots_amarante;
-    if (!amLots) return;
-
-    // Verificar se o patch já foi aplicado (AM_B7, B8, B12 já estão com depósito)
-    var b7 = amLots.find(function(l){ return l.id === 'AM_B7'; });
-    var b8 = amLots.find(function(l){ return l.id === 'AM_B8'; });
-    var b12 = amLots.find(function(l){ return l.id === 'AM_B12'; });
-    if (b7 && b7.volume > 0 && b8 && b8.volume > 0 && b12 && b12.volume > 0) return; // já revertido
-
-    // 1. Remover o lote resultado da lotação (B1525 no Inox 3)
-    d.lots_amarante = amLots.filter(function(l){
-      // Remove qualquer lote no Inox 3 com status diferente de '' (o mkA define IX3 com volume 0)
-      // ou que tenha AM_B7, AM_B8, AM_B12 como lotes_pai
-      var pais = l.lotes_pai || [];
-      var isLotacaoResult =
-        (l.deposito === 'Inox 3' && l.volume > 0) ||
-        (pais.indexOf('AM_B7') >= 0 || pais.indexOf('AM_B8') >= 0 || pais.indexOf('AM_B12') >= 0);
-      return !isLotacaoResult;
-    });
-
-    // 2. Restaurar AM_B7, AM_B8, AM_B12 com os dados originais da folha
-    var restoredIds = ['AM_B7','AM_B8','AM_B12'];
-    d.lots_amarante.forEach(function(l){
-      if (l.id === 'AM_B7') {
-        l.volume = 225; l.deposito = 'B7'; l.status = 'maturacao';
-        l.lotes_filho = [];
-        // Remover operação de lotação se existir
-        l.operacoes = (l.operacoes||[]).filter(function(op){ return op.tipo !== 'lotacao'; });
-      }
-      if (l.id === 'AM_B8') {
-        l.volume = 225; l.deposito = 'B8'; l.status = 'maturacao';
-        l.lotes_filho = [];
-        l.operacoes = (l.operacoes||[]).filter(function(op){ return op.tipo !== 'lotacao'; });
-      }
-      if (l.id === 'AM_B12') {
-        l.volume = 225; l.deposito = 'B12'; l.status = 'maturacao';
-        l.lotes_filho = [];
-        l.operacoes = (l.operacoes||[]).filter(function(op){ return op.tipo !== 'lotacao'; });
-      }
-    });
-
-    // 3. Restaurar AM_IX3 para vazio (como estava antes)
-    d.lots_amarante.forEach(function(l){
-      if (l.id === 'AM_IX3') {
-        l.volume = 0; l.status = 'maturacao';
-        l.casta = ''; l.nome = 'Inox 3 — ';
-        l.lotes_pai = []; l.lotes_filho = [];
-        l.operacoes = []; l.analises = [];
-      }
-    });
-
-    localStorage.setItem(KEY, JSON.stringify(d));
-  } catch(e){}
-})();
-</script>
 </head>
 <body>
 
@@ -419,8 +356,7 @@ input[type=file]{display:none}
     <button class="adega-switcher-btn" data-adega="amarante" onclick="switchAdega('amarante')">Amarante</button>
   </div>
   <span class="spacer"></span>
-  <div id="sb-status" style="display:none;align-items:center;gap:6px;font-size:11px;font-weight:500;padding:4px 10px;border-radius:20px;white-space:nowrap"></div>
-  <button id="btn-undo" onclick="undoLastOperation()" title="Desfazer última operação" style="display:none;background:var(--amber-light);border-color:#E5C060;color:var(--amber)"><i class="ti ti-arrow-back-up" aria-hidden="true"></i> Desfazer</button>
+  <div id="sb-status" style="display:none;align-items:center;gap:6px;font-size:11px;font-weight:500;padding:4px 12px;border-radius:20px;white-space:nowrap"></div>
   <button id="btn-lista-lotes" onclick="toggleVistaListaLotes()"><i class="ti ti-list" aria-hidden="true"></i> Lista de Lotes</button>
   <button id="btn-vista" onclick="toggleVista()"><i class="ti ti-layout-grid" aria-hidden="true"></i> Vista de Adega</button>
   <button id="btn-analises-resumo" onclick="toggleVistaAnalises()"><i class="ti ti-microscope" aria-hidden="true"></i> Análises</button>
@@ -962,13 +898,7 @@ function renderSidebar(filter=''){
   const current = (groups[sidebarTab]||[]).filter(match).filter(l => {
     if(_fSidebar.cor && l.tipo !== _fSidebar.cor) return false;
     if(_fSidebar.vindima && String(l.vindima||'') !== _fSidebar.vindima) return false;
-    if(_fSidebar.produtor){
-      const prod = _fSidebar.produtor.toLowerCase();
-      const hasOrig = (l.origens||[]).some(o=>(o.quinta||'').toLowerCase().includes(prod));
-      // Fallback: procura também no nome do lote e notas (para lotes sem origens migradas)
-      const hasName = (l.nome||'').toLowerCase().includes(prod) || (l.notas||'').toLowerCase().includes(prod);
-      if(!hasOrig && !hasName) return false;
-    }
+    if(_fSidebar.produtor && !(l.origens||[]).some(o=>o.quinta===_fSidebar.produtor)) return false;
     return true;
   });
 
@@ -1811,14 +1741,6 @@ function confirmOperation(){
   // Snapshots capturados ANTES de esvaziar — necessários para calcular origens do novo lote
   const sourceSnapshots = [];
 
-  // ── Snapshot para undo ANTES de qualquer mutação ──────────────────────────
-  const undoDesc = novoLoteData
-    ? `Lotação → ${novoLoteData.nome || 'novo lote'}`
-    : ops.length === 1
-      ? (ops[0].descricao || ops[0].tipo || 'Operação')
-      : `${ops.length} operações`;
-  pushUndoSnapshot(undoDesc);
-
   ops.forEach(opData=>{
     const lot = lots.find(l=>l.id===opData.lote_id);
     if(!lot) return;
@@ -1932,18 +1854,17 @@ function confirmOperation(){
   renderSidebar(document.getElementById('search-input').value);
   if(typeof renderVistaAdega==='function' && typeof vistaMode!=='undefined' && vistaMode) renderVistaAdega();
 
-  // ── Sync ao Supabase (async, não bloqueia UI) ─────────────────────────────
+  // Sync Supabase
   if(sbReady){
-    const affectedIds=[...new Set(ops.map(o=>o.lote_id).filter(Boolean))];
-    if(novoLot) affectedIds.push(novoLot.id);
-    affectedIds.forEach(id=>sbSyncLot(id));
-    ops.forEach(opData=>{
-      const lot=lots.find(l=>l.id===opData.lote_id);
-      if(!lot)return;
-      const lastOp=(lot.operacoes||[]).slice(-1)[0];
-      if(lastOp)sbInsertOp(lot.id,lastOp);
+    const affectedIds = [...new Set(ops.map(o=>o.lote_id).filter(Boolean))];
+    affectedIds.forEach(id => sbSyncLot(id));
+    if(novoLot) sbInsertLot(novoLot);
+    ops.forEach(opData => {
+      const lot = lots.find(l=>l.id===opData.lote_id);
+      if(!lot) return;
+      const lastOp = (lot.operacoes||[]).slice(-1)[0];
+      if(lastOp) sbInsertOp(lot.id, lastOp);
     });
-    if(novoLot)sbInsertLot(novoLot);
   }
 
   scheduleSave();
@@ -2119,8 +2040,7 @@ function deleteOp(opId){
   if(!lot) return;
   lot.operacoes = (lot.operacoes||[]).filter(o=>o.id!==opId);
   renderDetail(); renderSidebar();
-  scheduleSave([lot.id]);
-  sbFetch('/rest/v1/operacoes?id=eq.'+opId,{method:'DELETE'}).catch(e=>console.warn('sbDelete op:',e.message));
+  scheduleSave();
   toast('Operação apagada');
 }
 
@@ -2129,8 +2049,7 @@ function deleteAnalise(anId){
   if(!lot) return;
   lot.analises = (lot.analises||[]).filter(a=>a.id!==anId);
   renderDetail(); renderSidebar();
-  scheduleSave([lot.id]);
-  sbFetch('/rest/v1/analises?id=eq.'+anId,{method:'DELETE'}).catch(e=>console.warn('sbDelete analise:',e.message));
+  scheduleSave();
   toast('Análise apagada');
 }
 
@@ -2234,31 +2153,19 @@ function saveLot(){
   closeLotModal();
   renderSidebar();
   if(selectedLotId) selectLot(selectedLotId);
-
-  // Persistir no Supabase
-  if(editingLotId){
-    sbSyncLot(editingLotId);
-  } else {
-    const newLot = lots.find(l=>l.id===selectedLotId);
-    if(newLot) sbInsertLot(newLot);
-  }
-  scheduleSave([selectedLotId].filter(Boolean));
+  scheduleSave();
   toast(editingLotId?'Lote actualizado':'Lote criado');
 }
 
 function deleteCurrentLot(){
   if(!selectedLotId) return;
   if(!confirm('Apagar este lote e todas as suas operações e análises?')) return;
-  const idToDelete = selectedLotId;
-  lots = lots.filter(l=>l.id!==idToDelete);
+  lots = lots.filter(l=>l.id!==selectedLotId);
   selectedLotId = null;
   document.getElementById('empty-state').style.display='flex';
   document.getElementById('lot-detail').style.display='none';
   renderSidebar();
   scheduleSave();
-  // Apagar do Supabase (CASCADE apaga operações, análises, origens)
-  sbFetch('/rest/v1/lotes?id=eq.'+idToDelete, {method:'DELETE'})
-    .catch(e=>console.warn('sbDelete lote:',e.message));
   toast('Lote apagado');
 }
 
@@ -2379,69 +2286,65 @@ function editCodigoLote(id){
 
 const LS_KEY = 'adega_tracker_v12';
 
-// ─── Supabase ─────────────────────────────────────────────
+// ─── Supabase ─────────────────────────────────────────────────────────────────
 const SB_URL = 'https://orcrsokwvgawemahmgnv.supabase.co';
 const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9yY3Jzb2t3dmdhd2VtYWhtZ252Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYzNjQxMTUsImV4cCI6MjEwMTk0MDExNX0.76Xl2oy9Zku-ESgAIdueaDIrG15uDm5OuhKRU7LaF4U';
 const SB_HDR = {'Content-Type':'application/json','apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY,'Prefer':'return=minimal'};
-let sbReady = false, sbSyncTimer = null;
+let sbReady = false;
 
 async function sbFetch(path, opts={}) {
   const r = await fetch(SB_URL+path, {...opts, headers:{...SB_HDR,...(opts.headers||{})}});
-  if(!r.ok){const t=await r.text();throw new Error(`SB ${opts.method||'GET'} ${path}: ${r.status} — ${t}`);}
-  return r.status===204?null:r.json();
+  if(!r.ok){ const t=await r.text(); throw new Error(`SB ${opts.method||'GET'} ${path}: ${r.status} — ${t}`); }
+  return r.status===204 ? null : r.json();
 }
 
-async function sbLoad(){
-  try{
-    const lotes=await sbFetch('/rest/v1/lotes?select=*&order=data_criacao.asc');
-    if(!lotes||lotes.length===0)return false;
-    const[ops,ans,origens,rels]=await Promise.all([
-      sbFetch('/rest/v1/operacoes?select=*&order=data.desc'),
-      sbFetch('/rest/v1/analises?select=*&order=data.desc'),
-      sbFetch('/rest/v1/lote_origens?select=*'),
-      sbFetch('/rest/v1/lote_relacoes?select=*')
-    ]);
-    const oByL={},aByL={},orByL={},paisByF={},filhosByP={};
-    (ops||[]).forEach(o=>{(oByL[o.lote_id]=oByL[o.lote_id]||[]).push(sbOpToLocal(o));});
-    (ans||[]).forEach(a=>{(aByL[a.lote_id]=aByL[a.lote_id]||[]).push(sbAnToLocal(a));});
-    (origens||[]).forEach(o=>{(orByL[o.lote_id]=orByL[o.lote_id]||[]).push(o);});
-    (rels||[]).forEach(r=>{
-      (paisByF[r.lote_filho_id]=paisByF[r.lote_filho_id]||[]).push(r.lote_pai_id);
-      (filhosByP[r.lote_pai_id]=filhosByP[r.lote_pai_id]||[]).push(r.lote_filho_id);
-    });
-    const bairrada=[],amarante=[];
-    lotes.forEach(l=>{
-      const lot={...l,
-        origens:orByL[l.id]||[],operacoes:oByL[l.id]||[],
-        analises:aByL[l.id]||[],lotes_pai:paisByF[l.id]||[],lotes_filho:filhosByP[l.id]||[]
-      };
-      if(l.adega_id==='amarante')amarante.push(lot);else bairrada.push(lot);
-    });
-    lots_bairrada=bairrada;lots_amarante=amarante;
-    currentAdega='bairrada';lots=lots_bairrada;
-    migrateLotsBucket(lots_bairrada);migrateLotsBucket(lots_amarante);migrateCodigos();
-    sbReady=true;
-    console.log('✓ Supabase: '+lotes.length+' lotes carregados');
-    return true;
-  }catch(e){console.warn('sbLoad falhou:',e.message);return false;}
-}
-
-function sbOpToLocal(o){
-  return{id:o.id,tipo:o.tipo,data:o.data,descricao:o.descricao,responsavel:o.responsavel,notas:o.notas,
+// Carrega todos os dados do Supabase e reconstrói lots_bairrada / lots_amarante
+async function sbLoad() {
+  const lotes = await sbFetch('/rest/v1/lotes?select=*&order=data_criacao.asc');
+  if(!lotes||lotes.length===0) return false;
+  const [ops,ans,origens,rels] = await Promise.all([
+    sbFetch('/rest/v1/operacoes?select=*&order=data.desc'),
+    sbFetch('/rest/v1/analises?select=*&order=data.desc'),
+    sbFetch('/rest/v1/lote_origens?select=*'),
+    sbFetch('/rest/v1/lote_relacoes?select=*')
+  ]);
+  const oByL={},aByL={},orByL={},paisByF={},filhosByP={};
+  (ops||[]).forEach(o=>{(oByL[o.lote_id]=oByL[o.lote_id]||[]).push({
+    id:o.id,tipo:o.tipo,data:o.data,descricao:o.descricao,responsavel:o.responsavel,notas:o.notas,
     detalhes:{deposito_origem:o.deposito_origem,deposito_destino:o.deposito_destino,
-      volume:o.volume,produto:o.produto,dose:o.dose,temperatura:o.temperatura}};
-}
-function sbAnToLocal(a){
-  return{id:a.id,data:a.data,laboratorio:a.laboratorio,ficheiro:a.ficheiro,notas:a.notas,
+      volume:o.volume,produto:o.produto,dose:o.dose,temperatura:o.temperatura}
+  });});
+  (ans||[]).forEach(a=>{(aByL[a.lote_id]=aByL[a.lote_id]||[]).push({
+    id:a.id,data:a.data,laboratorio:a.laboratorio,ficheiro:a.ficheiro,notas:a.notas,
     dados:{alcool:a.alcool,pH:a.ph,acidez_total:a.acidez_total,acidez_volatil:a.acidez_volatil,
       SO2_livre:a.so2_livre,SO2_total:a.so2_total,acucar_residual:a.acucar_residual,
       turbidez:a.turbidez,massa_volumica:a.massa_volumica,acido_malico:a.acido_malico,
-      indice_polifenois_totais:a.indice_polifenois_totais}};
+      indice_polifenois_totais:a.indice_polifenois_totais}
+  });});
+  (origens||[]).forEach(o=>{(orByL[o.lote_id]=orByL[o.lote_id]||[]).push(o);});
+  (rels||[]).forEach(r=>{
+    (paisByF[r.lote_filho_id]=paisByF[r.lote_filho_id]||[]).push(r.lote_pai_id);
+    (filhosByP[r.lote_pai_id]=filhosByP[r.lote_pai_id]||[]).push(r.lote_filho_id);
+  });
+  const bairrada=[],amarante=[];
+  lotes.forEach(l=>{
+    const lot={...l,
+      origens:orByL[l.id]||[],operacoes:oByL[l.id]||[],analises:aByL[l.id]||[],
+      lotes_pai:paisByF[l.id]||[],lotes_filho:filhosByP[l.id]||[]
+    };
+    if(l.adega_id==='amarante') amarante.push(lot); else bairrada.push(lot);
+  });
+  lots_bairrada=bairrada; lots_amarante=amarante;
+  currentAdega='bairrada'; lots=lots_bairrada;
+  sbReady=true;
+  console.log('✓ Supabase: '+lotes.length+' lotes');
+  return true;
 }
 
-async function sbSyncLot(lotId){
-  const l=lots.find(x=>x.id===lotId);if(!l)return;
-  try{
+// Upsert de um lote no Supabase
+async function sbSyncLot(lotId) {
+  const l=lots.find(x=>x.id===lotId); if(!l) return;
+  try {
     await sbFetch('/rest/v1/lotes',{method:'POST',
       headers:{'Prefer':'resolution=merge-duplicates,return=minimal'},
       body:JSON.stringify({id:l.id,adega_id:currentAdega,nome:l.nome,
@@ -2452,11 +2355,12 @@ async function sbSyncLot(lotId){
         kg_uvas_origem:l.kg_uvas_origem||null,rendimento_pct:l.rendimento_pct||null,
         custo_per_litro:l.custo_per_litro||null,custo_uva_investido:l.custo_uva_investido||0,
         notas:l.notas||null,data_criacao:l.data_criacao||new Date().toISOString()})});
-  }catch(e){console.warn('sbSyncLot:',e.message);}
+  } catch(e){ console.warn('sbSyncLot:',e.message); }
 }
 
-async function sbInsertOp(lotId,op){
-  try{
+// Inserir operação nova
+async function sbInsertOp(lotId, op) {
+  try {
     const det=op.detalhes||{};
     await sbFetch('/rest/v1/operacoes',{method:'POST',
       headers:{'Prefer':'resolution=ignore-duplicates,return=minimal'},
@@ -2464,11 +2368,12 @@ async function sbInsertOp(lotId,op){
         descricao:op.descricao||null,responsavel:op.responsavel||null,notas:op.notas||null,
         deposito_origem:det.deposito_origem||null,deposito_destino:det.deposito_destino||null,
         volume:det.volume||null,produto:det.produto||null,dose:det.dose||null,temperatura:det.temperatura||null})});
-  }catch(e){console.warn('sbInsertOp:',e.message);}
+  } catch(e){ console.warn('sbInsertOp:',e.message); }
 }
 
-async function sbInsertAnalise(lotId,an){
-  try{
+// Inserir análise nova
+async function sbInsertAnalise(lotId, an) {
+  try {
     const d=an.dados||{};
     await sbFetch('/rest/v1/analises',{method:'POST',
       headers:{'Prefer':'resolution=ignore-duplicates,return=minimal'},
@@ -2479,26 +2384,12 @@ async function sbInsertAnalise(lotId,an){
         acucar_residual:d.acucar_residual??null,turbidez:d.turbidez??null,
         massa_volumica:d.massa_volumica??null,acido_malico:d.acido_malico??null,
         indice_polifenois_totais:d.indice_polifenois_totais??null})});
-  }catch(e){console.warn('sbInsertAnalise:',e.message);}
+  } catch(e){ console.warn('sbInsertAnalise:',e.message); }
 }
 
-async function sbUpsertDeposito(lotId, deposito, volume){
-  try{
-    await sbFetch('/rest/v1/lote_depositos',{method:'POST',
-      headers:{'Prefer':'resolution=merge-duplicates,return=minimal'},
-      body:JSON.stringify({lote_id:lotId,deposito,volume})});
-  }catch(e){console.warn('sbUpsertDeposito:',e.message);}
-}
-
-async function sbDeleteDeposito(lotId, deposito){
-  try{
-    await sbFetch(`/rest/v1/lote_depositos?lote_id=eq.${lotId}&deposito=eq.${encodeURIComponent(deposito)}`,
-      {method:'DELETE'});
-  }catch(e){console.warn('sbDeleteDeposito:',e.message);}
-}
-
-async function sbInsertLot(lot){
-  try{
+// Inserir lote novo + origens + relações
+async function sbInsertLot(lot) {
+  try {
     await sbFetch('/rest/v1/lotes',{method:'POST',
       headers:{'Prefer':'resolution=merge-duplicates,return=minimal'},
       body:JSON.stringify({id:lot.id,adega_id:currentAdega,nome:lot.nome,
@@ -2520,140 +2411,15 @@ async function sbInsertLot(lot){
         headers:{'Prefer':'resolution=ignore-duplicates,return=minimal'},
         body:JSON.stringify(lot.lotes_pai.map(pId=>({lote_pai_id:pId,lote_filho_id:lot.id})))});
     }
-  }catch(e){console.warn('sbInsertLot:',e.message);}
-}
-
-async function sbMigrate(){
-  const raw=localStorage.getItem(LS_KEY);if(!raw)return false;
-  const d=JSON.parse(raw);
-  const byAdega={bairrada:d.lots_bairrada||[],amarante:d.lots_amarante||[]};
-  let total=0;
-  setSbStatus('A migrar dados para Supabase…','info');
-  for(const[adegaId,lotsArr]of Object.entries(byAdega)){
-    if(!lotsArr.length)continue;
-    for(let i=0;i<lotsArr.length;i+=50){
-      const batch=lotsArr.slice(i,i+50).map(l=>({
-        id:l.id,adega_id:adegaId,nome:l.nome,codigo_lote:l.codigo_lote||null,
-        casta:l.casta||null,vindima:l.vindima||null,tipo:l.tipo||null,
-        tipo_lote:l.tipo_lote||'vinho',volume:l.volume||0,capacidade:l.capacidade||null,
-        deposito:l.deposito||null,status:l.status||'maturacao',lote_ref:l.lote_ref||null,
-        kg_uvas_origem:l.kg_uvas_origem||null,rendimento_pct:l.rendimento_pct||null,
-        custo_per_litro:l.custo_per_litro||null,custo_uva_investido:l.custo_uva_investido||0,
-        notas:l.notas||null,data_criacao:l.data_criacao||new Date().toISOString()}));
-      await sbFetch('/rest/v1/lotes',{method:'POST',
-        headers:{'Prefer':'resolution=merge-duplicates,return=minimal'},body:JSON.stringify(batch)});
-      total+=batch.length;
-    }
-    const ops=[];
-    lotsArr.forEach(l=>(l.operacoes||[]).forEach(op=>{
-      const det=op.detalhes||{};
-      ops.push({id:op.id||uid(),lote_id:l.id,tipo:op.tipo||'outro',data:op.data||today(),
-        descricao:op.descricao||null,responsavel:op.responsavel||null,notas:op.notas||null,
-        deposito_origem:det.deposito_origem||null,deposito_destino:det.deposito_destino||null,
-        volume:det.volume||null,produto:det.produto||null,dose:det.dose||null,temperatura:det.temperatura||null});
-    }));
-    for(let i=0;i<ops.length;i+=100){
-      await sbFetch('/rest/v1/operacoes',{method:'POST',
-        headers:{'Prefer':'resolution=ignore-duplicates,return=minimal'},body:JSON.stringify(ops.slice(i,i+100))});
-    }
-    const ans=[];
-    lotsArr.forEach(l=>(l.analises||[]).forEach(a=>{
-      const d2=a.dados||{};
-      ans.push({id:a.id||uid(),lote_id:l.id,data:a.data,laboratorio:a.laboratorio||null,
-        ficheiro:a.ficheiro||null,notas:a.notas||null,
-        alcool:d2.alcool??null,ph:d2.pH??null,acidez_total:d2.acidez_total??null,
-        acidez_volatil:d2.acidez_volatil??null,so2_livre:d2.SO2_livre??null,so2_total:d2.SO2_total??null,
-        acucar_residual:d2.acucar_residual??null,turbidez:d2.turbidez??null,
-        massa_volumica:d2.massa_volumica??null,acido_malico:d2.acido_malico??null,
-        indice_polifenois_totais:d2.indice_polifenois_totais??null});
-    }));
-    for(let i=0;i<ans.length;i+=100){
-      await sbFetch('/rest/v1/analises',{method:'POST',
-        headers:{'Prefer':'resolution=ignore-duplicates,return=minimal'},body:JSON.stringify(ans.slice(i,i+100))});
-    }
-    const origens=[];
-    lotsArr.forEach(l=>(l.origens||[]).filter(o=>o.quinta||o.volume).forEach(o=>{
-      origens.push({lote_id:l.id,quinta:o.quinta||null,parcela:o.parcela||null,
-        volume:o.volume||null,percentagem:o.percentagem||null});
-    }));
-    if(origens.length){
-      await sbFetch('/rest/v1/lote_origens',{method:'POST',
-        headers:{'Prefer':'resolution=ignore-duplicates,return=minimal'},body:JSON.stringify(origens)});
-    }
-    const rels=[];
-    lotsArr.forEach(l=>(l.lotes_pai||[]).forEach(pId=>rels.push({lote_pai_id:pId,lote_filho_id:l.id})));
-    if(rels.length){
-      await sbFetch('/rest/v1/lote_relacoes',{method:'POST',
-        headers:{'Prefer':'resolution=ignore-duplicates,return=minimal'},body:JSON.stringify(rels)});
-    }
-  }
-  localStorage.setItem('sb_migrated','1');
-  setSbStatus('✓ '+total+' lotes migrados para Supabase','ok');
-  return true;
+  } catch(e){ console.warn('sbInsertLot:',e.message); }
 }
 
 function setSbStatus(msg,type){
-  const el=document.getElementById('sb-status');if(!el)return;
-  el.textContent=msg;el.style.display=msg?'flex':'none';
+  const el=document.getElementById('sb-status'); if(!el) return;
+  el.textContent=msg; el.style.display=msg?'flex':'none';
   el.style.background=type==='ok'?'var(--green-light)':type==='err'?'var(--coral-light)':'var(--amber-light)';
   el.style.color=type==='ok'?'var(--green-dark)':type==='err'?'var(--coral)':'var(--amber)';
-  if(type==='ok')setTimeout(()=>{if(el)el.style.display='none';},4000);
-}
-
-function scheduleSbSync(lotIds=[]){
-  clearTimeout(sbSyncTimer);
-  sbSyncTimer=setTimeout(async()=>{
-    try{for(const id of lotIds)await sbSyncLot(id);}
-    catch(e){console.warn('sbSync:',e.message);}
-  },1200);
-}
-
-// ─── Undo history ────────────────────────────────────────
-const UNDO_MAX = 10; // max snapshots kept
-let undoStack = []; // array of {lots_bairrada, lots_amarante, desc}
-
-function pushUndoSnapshot(desc) {
-  const snap = {
-    lots_bairrada: JSON.parse(JSON.stringify(lots_bairrada)),
-    lots_amarante: JSON.parse(JSON.stringify(lots_amarante)),
-    desc: desc || 'Operação'
-  };
-  undoStack.push(snap);
-  if (undoStack.length > UNDO_MAX) undoStack.shift();
-  updateUndoBtn();
-}
-
-function undoLastOperation() {
-  if (!undoStack.length) return;
-  const snap = undoStack.pop();
-  lots_bairrada = snap.lots_bairrada;
-  lots_amarante = snap.lots_amarante;
-  // Restore active lots pointer
-  lots = currentAdega === 'amarante' ? lots_amarante : lots_bairrada;
-  // Reset selection if it no longer exists
-  if (selectedLotId && !lots.find(l => l.id === selectedLotId)) {
-    selectedLotId = null;
-    document.getElementById('empty-state').style.display = 'flex';
-    document.getElementById('lot-detail').style.display = 'none';
-  }
-  renderSidebar();
-  if (selectedLotId) renderDetail();
-  if (typeof vistaMode !== 'undefined' && vistaMode) renderVistaAdega();
-  scheduleSave();
-  updateUndoBtn();
-  toast(`Desfeito: ${snap.desc}`);
-}
-
-function updateUndoBtn() {
-  const btn = document.getElementById('btn-undo');
-  if (!btn) return;
-  if (undoStack.length > 0) {
-    btn.style.display = 'flex';
-    const last = undoStack[undoStack.length - 1];
-    btn.title = `Desfazer: ${last.desc}`;
-  } else {
-    btn.style.display = 'none';
-  }
+  if(type==='ok') setTimeout(()=>{ if(el) el.style.display='none'; },3000);
 }
 
 function saveToLocalStorage(){
@@ -2775,13 +2541,22 @@ function loadFromLocalStorage(){
 }
 
 // Debounced auto-save — called after every state change
-function scheduleSave(lotIds=[]){
+function scheduleSave(){
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(()=>{
-    saveToLocalStorage();
-    if(dirHandle) saveToFolder();
-    if(lotIds.length) scheduleSbSync(lotIds);
-  }, 800);
+  saveTimer = setTimeout(()=>{ saveToLocalStorage(); if(dirHandle) saveToFolder(); }, 800);
+}
+
+// Sincroniza lotes afectados com Supabase (chamada após confirmOperation)
+function sbSyncAfterOp(affectedLotIds, newLot, newOps, newAnalises) {
+  if(!sbReady) return;
+  // Upsert lotes afectados
+  affectedLotIds.forEach(id => sbSyncLot(id));
+  // Inserir novo lote se existir
+  if(newLot) sbInsertLot(newLot);
+  // Inserir operações novas
+  (newOps||[]).forEach(({lotId,op}) => sbInsertOp(lotId, op));
+  // Inserir análises novas
+  (newAnalises||[]).forEach(({lotId,an}) => sbInsertAnalise(lotId, an));
 }
 
 // ─── Export / Import (backup manual) ──────────────────────
@@ -3174,7 +2949,6 @@ function closeOpModal(){ document.getElementById('op-modal').style.display = 'no
 function onOpTypeChange(tipo){
   updateOpDesc(tipo);
   document.getElementById('om-fields').innerHTML = buildOpFields(tipo);
-  if(tipo === 'trasfega') addTrasfDest();
 }
 
 function buildOpFields(tipo){
@@ -3211,15 +2985,9 @@ function buildOpFields(tipo){
         <select id="om-src" onchange="updateTrasfiVolRows()"><option value="">— seleccionar —</option>${lotOpts()}</select>
       </div>
       <div id="om-trasf-vol-rows" style="display:none;margin-bottom:14px"></div>
-      <div class="form-row">
-        <label>Destinos <span style="font-size:11px;color:var(--text3)">— podes adicionar vários</span></label>
-        <div id="om-dest-rows" style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:6px">
-          <div style="display:grid;grid-template-columns:1fr 110px 32px;gap:6px;padding:6px 10px;background:var(--gray-light);font-size:11px;color:var(--text3);font-weight:500">
-            <span>Cuba destino</span><span>Volume (L)</span><span></span>
-          </div>
-          <div id="om-dest-list"></div>
-        </div>
-        <button type="button" onclick="addTrasfDest()" style="font-size:12px;color:var(--green);background:none;border:none;cursor:pointer;padding:2px 0;display:flex;align-items:center;gap:4px"><i class="ti ti-plus" aria-hidden="true"></i> Adicionar destino</button>
+      <div class="form-row"><label>Cuba destino</label><select id="om-dest"><option value="">— seleccionar —</option>${depOpts()}</select></div>
+      <div class="alert-info" style="font-size:12px;color:#1E40AF;background:#EFF6FF;border:1px solid #BFDBFE;border-radius:var(--radius);padding:8px 12px;margin-top:4px">
+        <i class="ti ti-info-circle"></i> Para mover vinho de várias cubas para uma, usa <strong>Lotação</strong>.
       </div>
       ${dateF}${notasF}`;
 
@@ -3840,166 +3608,41 @@ function checkVesselCapacity(destDep, volToAdd, excludeLotIds=[]){
 }
 
 // ── TRASFEGA ──────────────────────────────────────────────────────────────────
-function depOpts(excludeDep){
-  // Lista todos os depósitos conhecidos (do registo de vasilhas + lotes actuais)
-  const known = Object.keys(VESSEL_REGISTRY||{});
-  const fromLots = lots.map(l=>l.deposito).filter(Boolean);
-  const all = [...new Set([...known,...fromLots])].sort((a,b)=>{
-    // Ordenar: B primeiro, depois Inox, DT, outros
-    const rank = s => s.startsWith('B')?0:s.startsWith('Inox')?1:s.startsWith('DT')?2:3;
-    if(rank(a)!==rank(b)) return rank(a)-rank(b);
-    return a.localeCompare(b, 'pt', {numeric:true});
-  });
-  return all.filter(d=>d!==excludeDep).map(d=>{
-    const lot = lots.find(l=>l.deposito===d);
-    const label = lot ? `${d} — ${(lot.casta||'').substring(0,20)} (${fmtVol(lot.volume)})` : `${d} — livre`;
-    return `<option value="${d}">${label}</option>`;
-  }).join('');
-}
-
-function addTrasfDest(){
-  const list = document.getElementById('om-dest-list');
-  if(!list) return;
-  const idx = list.children.length;
-  const srcLot = lots.find(l=>l.id===document.getElementById('om-src')?.value);
-  const defaultVol = srcLot ? (srcLot.volume||0) : '';
-  const row = document.createElement('div');
-  row.id = `trasf-dest-row-${idx}`;
-  row.style.cssText = 'display:grid;grid-template-columns:1fr 110px 32px;gap:6px;padding:7px 10px;border-top:1px solid var(--border);align-items:center';
-  row.innerHTML = `
-    <select id="om-dest-dep-${idx}" style="font-size:12px;padding:5px 6px;border:1px solid var(--border);border-radius:var(--radius);outline:none" onfocus="this.style.borderColor='var(--green)'" onblur="this.style.borderColor='var(--border)'">
-      <option value="">— cuba —</option>${depOpts()}
-    </select>
-    <input type="number" id="om-dest-vol-${idx}" value="${defaultVol}" min="0" step="1"
-      style="padding:5px 6px;border:1px solid var(--border);border-radius:var(--radius);font-size:12px;outline:none;width:100%"
-      onfocus="this.style.borderColor='var(--green)'" onblur="this.style.borderColor='var(--border)'">
-    <button type="button" onclick="removeTrasfDest(${idx})" style="background:none;border:none;cursor:pointer;color:var(--text3);padding:2px;border-radius:4px" onmouseover="this.style.color='var(--coral)'" onmouseout="this.style.color='var(--text3)'">
-      <i class="ti ti-x" aria-hidden="true"></i>
-    </button>`;
-  list.appendChild(row);
-}
-
-function removeTrasfDest(idx){
-  const row = document.getElementById(`trasf-dest-row-${idx}`);
-  if(row) row.remove();
-}
-
-function getTrasfDestRows(){
-  const list = document.getElementById('om-dest-list');
-  if(!list) return [];
-  const rows = [];
-  list.querySelectorAll('[id^="trasf-dest-row-"]').forEach(row => {
-    const idxMatch = row.id.match(/trasf-dest-row-(\d+)/);
-    if(!idxMatch) return;
-    const idx = idxMatch[1];
-    const dep = document.getElementById(`om-dest-dep-${idx}`)?.value;
-    const vol = parseFloat(document.getElementById(`om-dest-vol-${idx}`)?.value)||0;
-    if(dep && vol > 0) rows.push({deposito: normalizeDeposito(dep), volume: vol});
-  });
-  return rows;
-}
-
 function execTrasfega(data, notas){
   const sel = document.getElementById('om-src');
   const lot = sel?.value ? lots.find(l=>l.id===sel.value) : null;
-  if(!lot){ toast('Selecciona a cuba de origem'); return; }
+  const destDep = document.getElementById('om-dest')?.value;
+  if(!lot)   { toast('Selecciona a cuba de origem'); return; }
+  if(!destDep){ toast('Selecciona a cuba de destino'); return; }
+  const nd = normalizeDeposito(destDep);
+  if(nd === lot.deposito){ toast('Origem e destino são a mesma cuba'); return; }
 
-  const destinos = getTrasfDestRows();
-  if(!destinos.length){ toast('Adiciona pelo menos um destino'); return; }
+  const inputEl = document.getElementById(`om-vol-${lot.id}`);
+  const moveVol = inputEl ? (parseFloat(inputEl.value)||lot.volume||0) : (lot.volume||0);
+  if(!moveVol||moveVol<=0){ toast('Volume a mover tem de ser superior a 0'); return; }
+  if(moveVol>(lot.volume||0)+0.5){ toast(`Volume (${fmtVol(moveVol)}) superior ao disponível (${fmtVol(lot.volume)})`); return; }
 
-  const totalMover = destinos.reduce((s,d)=>s+d.volume, 0);
-  if(totalMover <= 0){ toast('Volume total tem de ser superior a 0'); return; }
-  if(totalMover > (lot.volume||0) + 0.5){
-    toast(`Volume total (${fmtVol(totalMover)}) superior ao disponível (${fmtVol(lot.volume)})`);
-    return;
+  const alreadyAtDest = lot.deposito===nd ? [lot.id] : [];
+  if(!checkVesselCapacity(nd, moveVol, alreadyAtDest)) return;
+
+  const isFull = moveVol >= (lot.volume||0) - 0.5;
+  logOp(lot,'trasfega',data,
+    `Trasfega ${isFull?'total':'parcial'} de ${lot.deposito||'?'} para ${nd} (${fmtVol(moveVol)})`,
+    {deposito_origem:lot.deposito, deposito_destino:nd, volume:moveVol}, notas);
+
+  if(isFull){
+    // Lote move-se inteiro: actualiza o depósito
+    const pfx = lot.deposito ? lot.deposito+' — ' : null;
+    if(pfx && lot.nome?.startsWith(pfx)) lot.nome = nd+' — '+lot.nome.slice(pfx.length);
+    lot.deposito = nd;
+    if(getVR()[nd]) lot.capacidade = getVR()[nd];
+  } else {
+    // Trasfega parcial: origem perde volume (o restante fica na origem)
+    lot.volume = Math.max(0, (lot.volume||0) - moveVol);
   }
-
-  // Verificar capacidade de cada destino
-  for(const dest of destinos){
-    if(dest.deposito === lot.deposito){ toast(`Destino ${dest.deposito} é igual à origem`); return; }
-    if(!checkVesselCapacity(dest.deposito, dest.volume, [lot.id])) return;
-  }
-
-  // Detectar mistura em cada destino
-  const operacoes = [];
-  const lotesAfectados = new Set([lot.id]);
-  const isFull = totalMover >= (lot.volume||0) - 0.5;
-
-  // Registar operação na origem
-  const destDesc = destinos.map(d=>`${d.deposito} (${fmtVol(d.volume)})`).join(', ');
-  logOp(lot, 'trasfega', data,
-    `Trasfega ${isFull?'total':'parcial'} de ${lot.deposito||'?'} para ${destDesc} — total ${fmtVol(totalMover)}`,
-    {deposito_origem: lot.deposito, deposito_destino: destinos.map(d=>d.deposito).join('+'), volume: totalMover}, notas);
-
-  for(const dest of destinos){
-    // Ver se há lote existente no destino com casta diferente
-    const lotesNoDest = lots.filter(l => l.id !== lot.id && (l.deposito === dest.deposito || (l.depositos||[]).some(d=>d.deposito===dest.deposito)) && (l.volume||0) > 0);
-    const hasMistura = lotesNoDest.some(l => l.casta !== lot.casta || l.vindima !== lot.vindima);
-
-    if(hasMistura){
-      // Cenário B: cria novo lote de lotação
-      const loteMistura = lotesNoDest[0];
-      const novoNome = `${dest.deposito} — Blend ${lot.casta||'?'}+${loteMistura?.casta||'?'}`;
-      const novoLote = {
-        id: uid(), nome: novoNome,
-        casta: [lot.casta, loteMistura?.casta].filter(Boolean).join('+'),
-        vindima: lot.vindima,
-        tipo: lot.tipo || loteMistura?.tipo,
-        tipo_lote: 'vinho',
-        volume: dest.volume + (loteMistura?.volume||0),
-        capacidade: getVR()[dest.deposito] || null,
-        deposito: dest.deposito,
-        status: 'maturacao',
-        lotes_pai: [lot.id, ...(loteMistura ? [loteMistura.id] : [])],
-        lotes_filho: [], origens: [], operacoes: [], analises: [],
-        data_criacao: new Date().toISOString()
-      };
-      lots.push(novoLote);
-      // Ligar lotes_filho aos pais
-      [lot, loteMistura].filter(Boolean).forEach(p => {
-        if(!p.lotes_filho) p.lotes_filho = [];
-        p.lotes_filho.push(novoLote.id);
-        if(p.id === lot.id) p.volume = Math.max(0, (p.volume||0) - dest.volume);
-        else p.volume = 0;
-        lotesAfectados.add(p.id);
-      });
-      lotesAfectados.add(novoLote.id);
-      // Sync Supabase
-      sbInsertLot(novoLote);
-      sbInsertOp(novoLote.id, {id:uid(), tipo:'lotacao', data:data||today(),
-        descricao:`Blend criado por trasfega com mistura em ${dest.deposito}`,
-        detalhes:{deposito_origem:lot.deposito, deposito_destino:dest.deposito, volume:dest.volume}});
-      // Actualizar lote_depositos no Supabase
-      sbUpsertDeposito(novoLote.id, dest.deposito, novoLote.volume);
-    } else {
-      // Cenário A: sem mistura — lote mantém-se, ganha/actualiza depósito
-      if(isFull && destinos.length === 1){
-        // Trasfega total para um único destino: lote muda de cuba
-        const pfx = lot.deposito ? lot.deposito+' — ' : null;
-        if(pfx && lot.nome?.startsWith(pfx)) lot.nome = dest.deposito+' — '+lot.nome.slice(pfx.length);
-        lot.deposito = dest.deposito;
-        lot.volume = dest.volume;
-        if(getVR()[dest.deposito]) lot.capacidade = getVR()[dest.deposito];
-      } else {
-        // Trasfega parcial ou multi-destino: lote fica em múltiplos depósitos
-        lot.volume = Math.max(0, (lot.volume||0) - dest.volume);
-        // Criar sub-entrada na tabela lote_depositos
-        sbUpsertDeposito(lot.id, dest.deposito, dest.volume);
-      }
-      lotesAfectados.add(lot.id);
-    }
-  }
-
-  // Se trasfega total e único destino, remover depósito origem do Supabase
-  if(isFull && destinos.length === 1){
-    sbUpsertDeposito(lot.id, destinos[0].deposito, destinos[0].volume);
-  }
-
-  // Actualizar volume origem no Supabase
-  sbSyncLot(lot.id);
 
   closeOpModal();
-  afterOp([...lotesAfectados][0], `Trasfega executada: ${fmtVol(totalMover)} → ${destDesc}`);
+  afterOp(lot.id, `Trasfega ${isFull?'total':'parcial'} executada: ${fmtVol(moveVol)} → ${nd}`);
 }
 
 // ── Atualiza linhas de volume por cuba (lotação) ──────────────────────────────
@@ -7345,22 +6988,21 @@ function refreshBairradaSulfitagem(lotsArr){
     });
   });
 }
-// ── Init assíncrono: Supabase primeiro, localStorage como fallback ────────────
-(async function initApp(){
-  setSbStatus('A ligar ao Supabase…','info');
+// ── Init: Supabase primeiro, localStorage como fallback ───────────────────────
+(async function(){
+  setSbStatus('A ligar…','info');
   let fromSb = false;
-  try { fromSb = await sbLoad(); } catch(e){}
+  try { fromSb = await sbLoad(); } catch(e){ console.warn('sbLoad:',e); }
 
   if(fromSb){
-    setSbStatus('✓ Supabase ligado','ok');
+    setSbStatus('✓ Supabase','ok');
   } else {
-    // Fallback: localStorage / demo data
     setSbStatus('','');
     if(!loadFromLocalStorage()){ loadDemoData(); migrateCodigos(); }
   }
 
   secosInv = currentAdega === 'amarante' ? secosInv_amarante : secosInv_bairrada;
-  if(lots_amarante.length === 0){ loadAmaranteData(); if(currentAdega==='amarante') lots=lots_amarante; }
+  if(lots_amarante.length === 0) { loadAmaranteData(); if(currentAdega==='amarante') lots=lots_amarante; }
   else { migrateAmaranteLoteRefs(lots_amarante); }
   refreshAmaranteAmostras(lots_amarante);
   refreshAmaranteAnalyses(lots_amarante);
@@ -7368,12 +7010,6 @@ function refreshBairradaSulfitagem(lotsArr){
   refreshBairradaSulfitagem(lots_bairrada);
   saveToLocalStorage();
 
-  // Migração automática: se há dados no localStorage e ainda não migrámos
-  if(!fromSb && !localStorage.getItem('sb_migrated') && localStorage.getItem(LS_KEY)){
-    try{ await sbMigrate(); sbReady=true; }catch(e){ console.warn('Migração falhou:',e.message); }
-  }
-
-  updateUndoBtn();
   updateSidebarVindimas();
   // Sync winery switcher UI to match loaded state
   document.querySelectorAll('.adega-switcher-btn').forEach(b=>{
@@ -7382,7 +7018,7 @@ function refreshBairradaSulfitagem(lotsArr){
   const _initLogo = document.getElementById('adega-logo');
   if(_initLogo) _initLogo.innerHTML = currentAdega==='amarante' ? 'Amarante <span>Adega</span>' : 'Face B <span>Adega</span>';
 
-  // Activar separador "Estágio" no arranque
+  // Activar separador "Estágio" no arranque (onde estão os dados demo)
   document.querySelectorAll('.sidebar-tab').forEach(t=>{
     t.classList.toggle('st-active', t.dataset.tab===sidebarTab);
   });
